@@ -587,3 +587,110 @@ async def test_subscription_rejection_diagnostics_are_specific_and_private(env, 
     params["ttlMs"] = -1
     with pytest.raises(Exception, match="Invalid subscription lifetime"):
         await app.state.mcp.call("events/subscribe", params, "owner")
+
+
+async def report(app, task_id, status, result, owner="owner"):
+    return await app.state.mcp.call(
+        "tools/call",
+        {
+            "name": "report_task_result",
+            "arguments": {"task_id": task_id, "status": status, "result": result},
+        },
+        owner,
+    )
+
+
+async def test_acknowledgment_lifecycle_and_deadlines(env, monkeypatch):
+    s, app, client, cb, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+    row = await add(env, "Dots, check my calendar")
+    store, rid = app.state.store, row["id"]
+    sent = row["delivered_at"]
+    assert sent is not None and row["acknowledged_at"] is None
+    assert store.view(row, sent + 299)["display_status"] == "awaiting_ack"
+    assert store.view(row, sent + 300)["display_status"] == "no_ack"
+    get = await app.state.mcp.call("tools/call", {"name": "get_task", "arguments": {"task_id": rid}}, "owner")
+    assert json.loads(get["content"][0]["text"])["acknowledged_at"] is None
+    # Reading is not an acknowledgment. Explicit progress is required.
+    monkeypatch.setattr(time, "time", lambda: sent + 310)
+    response = await client.get("/api/requests", headers=auth(s, admin=True))
+    assert response.json()["requests"][0]["attention"] is True
+    await app.state.worker.tick()
+    assert len(cb.calls) == 2  # Verification and original delivery only; no timeout resend.
+    await report(app, rid, "in_progress", "Checking calendar")
+    started = store.get(rid)
+    assert started["acknowledged_at"] == sent + 310
+    assert store.view(started)["display_status"] == "in_progress"
+    assert store.view(started, sent + 2110)["display_status"] == "stalled"
+    await report(app, rid, "in_progress", "Checking calendar")
+    assert store.get(rid) == started
+    monkeypatch.setattr(time, "time", lambda: sent + 400)
+    await report(app, rid, "needs_input", "Which day?")
+    waiting = store.get(rid)
+    assert store.view(waiting, sent + 99999)["display_status"] == "needs_input"
+    assert store.view(waiting)["attention"] is True
+    monkeypatch.setattr(time, "time", lambda: sent + 500)
+    await report(app, rid, "in_progress", "Checking Friday")
+    await report(app, rid, "completed", "Replied with available times")
+    finished = store.get(rid)
+    assert finished["finished_at"] == sent + 500
+    assert finished["acknowledged_at"] == sent + 310
+    assert not store.view(finished)["attention"]
+    await report(app, rid, "completed", "Replied with available times")
+    await report(app, rid, "in_progress", "Late duplicate acknowledgment")
+    assert store.get(rid) == finished
+    with pytest.raises(Exception, match="different final result"):
+        await report(app, rid, "failed", "Conflicting final outcome")
+    reopened = Store(s)
+    reopened.recover()
+    assert reopened.get(rid) == finished
+    reopened.close()
+
+
+@pytest.mark.parametrize("outcome", [200, 503, "timeout"])
+@pytest.mark.parametrize("agent_status", ["in_progress", "needs_input", "completed", "failed"])
+async def test_agent_report_wins_webhook_race(env, outcome, agent_status):
+    _, app, _, cb, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+
+    async def early_ack(url, body, headers):
+        task_id = json.loads(body)["data"]["task_id"]
+        await report(app, task_id, agent_status, "Agent update")
+        if outcome == "timeout":
+            raise TimeoutError()
+        return outcome, b""
+
+    cb.post = early_ack
+    row = await add(env, "Dots, check a shipment")
+    assert row["status"] == agent_status
+    assert row["acknowledged_at"] is not None
+    assert row["attempts"] == 0
+    assert not app.state.store.pending()
+
+
+async def test_progress_reports_require_owner_and_nonempty_summary(env):
+    _, app, _, _, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+    row = await add(env, "Dots, find a receipt")
+    with pytest.raises(Exception, match="Task not found"):
+        await report(app, row["id"], "in_progress", "Working", owner="other")
+    for state, summary in [("started", "Working"), ("in_progress", " "), ("needs_input", "x" * 4001)]:
+        with pytest.raises(Exception, match="Invalid task result"):
+            await report(app, row["id"], state, summary)
+    assert app.state.store.get(row["id"])["acknowledged_at"] is None
+
+
+async def test_old_database_migrates_without_inventing_acknowledgments(env):
+    s, app, _, _, _ = env
+    row = await add(env, "Dots, legacy request")
+    store = app.state.store
+    store.update(row["id"], status="delivered", detail="Received by ChatGPT; awaiting task result")
+    for column in ("delivered_at", "acknowledged_at", "progress_at", "finished_at"):
+        store.db.execute(f"ALTER TABLE requests DROP COLUMN {column}")
+    reopened = Store(s)
+    legacy = reopened.get(row["id"])
+    assert legacy["delivered_at"] is None and legacy["acknowledged_at"] is None
+    assert reopened.view(legacy)["display_status"] == "unconfirmed"
+    assert reopened.view(legacy)["attention"] is True
+    assert not reopened.pending()
+    reopened.close()

@@ -38,13 +38,17 @@ TOOLS = [
     },
     {
         "name": "report_task_result",
-        "description": "Record completion or failure of a delivered task. Idempotent.",
+        "description": (
+            "Acknowledge a voice task with in_progress before working, report needs_input when waiting "
+            "for the user, then completed after replying or failed if unable to finish. Include a short "
+            "progress/result summary. Repeating the same report is idempotent."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "status": {"type": "string", "enum": ["completed", "failed"]},
-                "result": {"type": "string", "maxLength": 4000},
+                "status": {"type": "string", "enum": ["in_progress", "needs_input", "completed", "failed"]},
+                "result": {"type": "string", "minLength": 1, "maxLength": 4000},
             },
             "required": ["task_id", "status", "result"],
             "additionalProperties": False,
@@ -177,16 +181,30 @@ class MCP:
             raise RPCError(-32602, "Task not found for this connection")
         if name == "report_task_result":
             if (
-                args.get("status") not in {"completed", "failed"}
+                args.get("status") not in {"in_progress", "needs_input", "completed", "failed"}
                 or not isinstance(args.get("result"), str)
+                or not args["result"].strip()
                 or len(args["result"]) > 4000
             ):
                 raise RPCError(-32602, "Invalid task result")
             if row["status"] in {"completed", "failed"}:
-                if row["status"] != args["status"] or row["detail"] != args["result"]:
+                if args["status"] in {"completed", "failed"} and (
+                    row["status"] != args["status"] or row["detail"] != args["result"]
+                ):
                     raise RPCError(-32602, "A different final result is already recorded")
-            else:
-                self.store.update(row["id"], status=args["status"], detail=args["result"])
+            elif row["status"] != args["status"] or row["detail"] != args["result"]:
+                now = time.time()
+                self.store.update(
+                    row["id"],
+                    status=args["status"],
+                    detail=args["result"],
+                    acknowledged_at=row["acknowledged_at"] or now,
+                    progress_at=now,
+                    finished_at=now if args["status"] in {"completed", "failed"} else None,
+                )
                 row = self.store.get(row["id"])
         result = {"task_id": row["id"], "text": row["body"], "status": row["status"], "result": row["detail"]}
+        result.update(
+            {key: row[key] for key in ("delivered_at", "acknowledged_at", "progress_at", "finished_at")}
+        )
         return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False}

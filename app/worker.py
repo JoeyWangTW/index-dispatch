@@ -119,13 +119,22 @@ class Worker:
         try:
             status, _ = await self.callbacks.post(sub["url"], body, headers)
         except Exception:
+            if self.store.get(rid)["acknowledged_at"] is not None:
+                return
             self.retry(request, "Callback unavailable; retry scheduled")
             return
-        # A fast agent may have reported completion while this HTTP request was in flight.
-        if self.store.get(rid)["status"] in {"completed", "failed"}:
+        # Agent acknowledgment is stronger evidence than the webhook response, even on HTTP failure.
+        current = self.store.get(rid)
+        if 200 <= status < 300 and current["delivered_at"] is None:
+            self.store.update(rid, delivered_at=time.time())
+        if current["acknowledged_at"] is not None or current["status"] in {"completed", "failed"}:
             return
         if 200 <= status < 300:
-            self.store.update(rid, status="delivered", detail="Received by ChatGPT; awaiting task result")
+            self.store.update(
+                rid,
+                status="delivered",
+                detail="Accepted by ChatGPT; waiting for agent acknowledgment",
+            )
         elif status == 429 or status >= 500:
             self.retry(request, f"Callback HTTP {status}; retry scheduled")
         else:
