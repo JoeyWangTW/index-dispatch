@@ -26,6 +26,24 @@ TASK_EVENT = {
 }
 TOOLS = [
     {
+        "name": "list_pending_tasks",
+        "description": (
+            "Recover unfinished voice tasks assigned to this connection when an event payload or task ID "
+            "is missing, or reconcile a batch. Reading does not acknowledge or claim work. Check each "
+            "task's latest state and prior chat results before acting; never blindly repeat old work. "
+            "Follow next_after_task_id until null."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+                "after_task_id": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
+    {
         "name": "get_task",
         "description": "Retrieve a voice task delivered to this connection.",
         "inputSchema": {
@@ -171,8 +189,10 @@ class MCP:
 
     def tool(self, p, client):
         name, args = p.get("name"), p.get("arguments", {})
-        if name not in {"get_task", "report_task_result"} or not isinstance(args, dict):
+        if name not in {"list_pending_tasks", "get_task", "report_task_result"} or not isinstance(args, dict):
             raise RPCError(-32602, "Unknown tool or invalid arguments")
+        if name == "list_pending_tasks":
+            return self.pending_tasks(args, client)
         row = self.store.get(str(args.get("task_id", "")))
         sub = self.store.db.execute(
             "SELECT client_id FROM subscriptions WHERE id=?", (row["subscription_id"] if row else "",)
@@ -203,8 +223,58 @@ class MCP:
                     finished_at=now if args["status"] in {"completed", "failed"} else None,
                 )
                 row = self.store.get(row["id"])
-        result = {"task_id": row["id"], "text": row["body"], "status": row["status"], "result": row["detail"]}
+        return self.response(self.task_data(row))
+
+    @staticmethod
+    def response(result):
+        return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False}
+
+    @staticmethod
+    def task_data(row):
+        result = {
+            "task_id": row["id"],
+            "text": row["body"],
+            "status": row["status"],
+            "result": row["detail"],
+            "created_at": row["created"],
+        }
         result.update(
             {key: row[key] for key in ("delivered_at", "acknowledged_at", "progress_at", "finished_at")}
         )
-        return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False}
+        return result
+
+    def pending_tasks(self, args, client):
+        limit, after = args.get("limit", 10), args.get("after_task_id")
+        if (
+            args.keys() - {"limit", "after_task_id"}
+            or type(limit) is not int
+            or not 1 <= limit <= 20
+            or (after is not None and (not isinstance(after, str) or not after))
+        ):
+            raise RPCError(-32602, "Invalid pending-task query")
+        # Keyset pagination survives an earlier page being completed between reads.
+        position = (-1, "")
+        if after is not None:
+            anchor = self.store.db.execute(
+                """SELECT r.created, r.id FROM requests r
+                   JOIN subscriptions s ON s.id=r.subscription_id
+                   WHERE r.id=? AND r.route='dots' AND s.client_id=?""",
+                (after, client),
+            ).fetchone()
+            if not anchor:
+                raise RPCError(-32602, "Task not found for this connection")
+            position = tuple(anchor)
+        rows = self.store.db.execute(
+            """SELECT r.* FROM requests r JOIN subscriptions s ON s.id=r.subscription_id
+               WHERE s.client_id=? AND r.route='dots'
+                 AND r.status IN ('delivering','delivered','in_progress','needs_input')
+                 AND (r.created,r.id) > (?,?)
+               ORDER BY r.created,r.id LIMIT ?""",
+            (client, *position, limit + 1),
+        ).fetchall()
+        return self.response(
+            {
+                "tasks": [self.task_data(row) for row in rows[:limit]],
+                "next_after_task_id": rows[limit - 1]["id"] if len(rows) > limit else None,
+            }
+        )
