@@ -770,3 +770,33 @@ async def test_old_database_migrates_without_inventing_acknowledgments(env):
     assert reopened.view(legacy)["attention"] is True
     assert not reopened.pending()
     reopened.close()
+
+
+async def test_cached_get_task_schema_can_recover_and_page_pending_tasks(env):
+    _, app, _, callbacks, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+    rows = [await add(env, f"Dots, cached catalog test {i}") for i in range(11)]
+    before = [app.state.store.get(r["id"]) for r in rows]
+
+    async def lookup(selector, owner="owner"):
+        result = await app.state.mcp.call(
+            "tools/call", {"name": "get_task", "arguments": {"task_id": selector}}, owner
+        )
+        return json.loads(result["content"][0]["text"])
+
+    first = await lookup("pending")
+    assert first == await pending_tasks(app)
+    assert len(first["tasks"]) == 10
+    await report(app, first["next_after_task_id"], "completed", "Done")
+    second = await lookup("pending:" + first["next_after_task_id"])
+    assert [task["task_id"] for task in second["tasks"]] == [rows[-1]["id"]]
+    assert second["next_after_task_id"] is None
+    assert await lookup("pending", "stranger") == {"tasks": [], "next_after_task_id": None}
+    with pytest.raises(Exception, match="Task not found for this connection"):
+        await lookup("pending:" + rows[0]["id"], "stranger")
+    with pytest.raises(Exception, match="Invalid pending-task query"):
+        await lookup("pending:")
+    with pytest.raises(Exception, match="Task not found for this connection"):
+        await report(app, "pending", "completed", "Cannot mutate a selector")
+    assert [app.state.store.get(r["id"]) for r in rows[:9]] == before[:9]
+    assert len(callbacks.calls) == 12  # Reads did not resend any events.

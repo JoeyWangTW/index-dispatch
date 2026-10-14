@@ -45,7 +45,11 @@ TOOLS = [
     },
     {
         "name": "get_task",
-        "description": "Retrieve a voice task delivered to this connection.",
+        "description": (
+            "Retrieve a voice task delivered to this connection. For clients with a cached tool catalog, "
+            "task_id='pending' lists unfinished tasks, and 'pending:<next_after_task_id>' reads the next "
+            "page. These read-only selectors have the same ownership checks as list_pending_tasks."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}},
@@ -193,6 +197,14 @@ class MCP:
             raise RPCError(-32602, "Unknown tool or invalid arguments")
         if name == "list_pending_tasks":
             return self.pending_tasks(args, client)
+        # Keep recovery usable while clients cache the original get_task input schema.
+        # Real task IDs are UUIDs; these reserved selectors cannot collide with them.
+        task_id = args.get("task_id")
+        if name == "get_task" and isinstance(task_id, str):
+            if task_id == "pending":
+                return self.pending_tasks({}, client)
+            if task_id.startswith("pending:"):
+                return self.pending_tasks({"after_task_id": task_id.removeprefix("pending:")}, client)
         row = self.store.get(str(args.get("task_id", "")))
         sub = self.store.db.execute(
             "SELECT client_id FROM subscriptions WHERE id=?", (row["subscription_id"] if row else "",)
