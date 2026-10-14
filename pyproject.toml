@@ -1,0 +1,19 @@
+[project]
+name = "index-dispatch"
+version = "0.1.0"
+description = "A small, self-hosted voice inbox for Index 01, Notion, and Dots"
+requires-python = ">=3.12"
+dependencies = ["fastapi", "uvicorn", "httpx", "python-multipart", "cryptography"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]

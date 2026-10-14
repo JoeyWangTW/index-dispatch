@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Index Dispatch</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><main><header><span class="eyebrow">YOUR VOICE, CONNECTED</span><h1>Index Dispatch<span>↗</span></h1>
+<p>A thought to keep. A task to do. One inbox for both.</p></header>
+<section id="login"><h2>Open your inbox</h2><form id="connect-form"><label for="token">Admin token</label>
+<div class="row"><input id="token" type="password" autocomplete="off" required><button>Connect</button></div>
+</form><small>Your token stays in this tab’s memory and clears when you reload.</small></section>
+<div id="workspace" hidden><div class="row status"><span id="connection"></span><button id="refresh" class="secondary">Refresh</button></div>
+<section><h2>Try a voice note</h2><form id="send-form"><label for="text">What would you like to send?</label>
+<textarea id="text" maxlength="12000" required placeholder="Dots, research a weekend trip to Big Sur"></textarea>
+<div class="row"><small>Try “Note to ideas: a weekend travel journal”.</small><button>Send</button></div></form></section>
+<section><h2>Recent requests</h2><p id="empty">Nothing here yet. Send a note to get started.</p><div id="requests"></div></section>
+<details><summary>Connection controls</summary><p>Disconnecting revokes every Dots connection. Queued tasks remain in your inbox.</p>
+<button id="disconnect" class="secondary">Disconnect Dots</button></details></div>
+<p id="message" role="status"></p><footer>Index 01 → Dispatch → Notion / Dots</footer></main></body></html>
