@@ -24,7 +24,9 @@ flowchart LR
 
 Command mode is the default and needs no model API key. It understands `Dots, …`, `ask Dots …`, and `note to NAME: …` / `note in NAME: …`. The colon or comma after a note destination is required. Other text becomes a note in the default destination. Unknown explicit destinations wait for review.
 
-Set `ROUTER_MODE=openai`, `OPENAI_API_KEY`, and a structured-output-capable `ROUTER_MODEL` to classify ordinary language. Explicit commands still take priority. Ambiguity, unsupported actions and classifier failures go to review. Semantic classification can make mistakes; start with explicit commands. No smart-home actions or other agent adapters ship in this version.
+Set `ROUTER_MODE=jev` and `TYPESAFE_API_KEY` (or `JEV_API_KEY`) to route with [Jev](https://docs.typesafe.ai/introduction/quickstart). `JEV_MODEL` defaults to `jev-latest`. Jev selects a configured Notion page, Dots, or review; the original transcript is preserved. Results below `JEV_MIN_CONFIDENCE` (default `0.75`) go to review. Built-in descriptions cover `inbox`, `ideas` and `journal`; customize any configured destination with `NOTE_DESTINATION_DESCRIPTIONS`, a JSON alias → description mapping. Note content is sent to TypeSafe when using Jev.
+
+Alternatively, set `ROUTER_MODE=openai`, `OPENAI_API_KEY`, and a structured-output-capable `ROUTER_MODEL` to classify ordinary language. Explicit commands still take priority. Ambiguity, unsupported actions and classifier failures go to review. Semantic classification can make mistakes; start with explicit commands. No smart-home actions or other agent adapters ship in this version.
 
 ## Hosting recommendation
 

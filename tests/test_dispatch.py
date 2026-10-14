@@ -359,3 +359,122 @@ async def test_malformed_utf8_is_rejected(env):
         "/webhooks/index", content=b"\xff", headers={**auth(s), "Content-Type": "application/json"}
     )
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "choice,confidence,status,destination",
+    [
+        ("note:ideas", 0.98, "completed", "ideas"),
+        ("dots", 0.97, "waiting_subscription", "dots"),
+        ("review", 0.99, "needs_review", ""),
+        ("note:ideas", 0.4, "needs_review", ""),
+        ("note:unknown", 0.99, "needs_review", ""),
+        ("dots", True, "needs_review", ""),
+        ("dots", "0.99", "needs_review", ""),
+        ("dots", 1.1, "needs_review", ""),
+    ],
+)
+async def test_jev_routes_and_rejects_uncertain_or_invalid_choices(
+    env, choice, confidence, status, destination
+):
+    s, app, _, _, state = env
+    s.router_mode, s.typesafe_key = "jev", "test-key"
+    state["ai"] = {"answers": {"destination": {"type": "choice", "choice": choice, "confidence": confidence}}}
+    text = "A travel journal that collects voice entries — 旅遊筆記"
+    row = await add(env, text)
+    assert row["status"] == status and (row["destination"] or "") == destination
+    if status != "needs_review":
+        assert row["body"] == text
+    else:
+        assert not state["notion_calls"]
+
+
+async def test_jev_request_contract_and_explicit_command_bypass(env):
+    from app.router import Router
+
+    s, _, _, _, _ = env
+    s.router_mode, s.typesafe_key = "jev", "test-key"
+    s.destinations["dots"] = "c" * 32
+    s.destination_descriptions = {"ideas": "Product ideas to save for later"}
+    calls = []
+
+    def upstream(request):
+        calls.append(request)
+        assert str(request.url) == "https://api.typesafe.ai/v1/systemone"
+        assert request.headers["Authorization"] == "Bearer test-key"
+        payload = json.loads(request.content)
+        assert payload["state"] == "Remember my idea"
+        assert payload["model"] == "jev-latest"
+        criteria = payload["questions"]["destination"]["criteria"]
+        assert set(criteria) == {"note:inbox", "note:ideas", "note:dots", "dots", "review"}
+        assert criteria["note:ideas"] == s.destination_descriptions["ideas"]
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "destination": {
+                        "type": "choice",
+                        "choice": "note:dots",
+                        "confidence": 0.9,
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        router = Router(s, client)
+        assert (await router.decide("Dots, research trains")).route == "dots"
+        assert (await router.decide("Note to ideas: a travel journal")).route == "note"
+        assert (await router.decide("Note to missing: retain this")).route == "review"
+        assert not calls
+        result = await router.decide("Remember my idea")
+        assert result.route == "note" and result.destination == "dots"
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["timeout", 401, 429, 503, "malformed"])
+async def test_jev_failures_preserve_request_for_review(env, failure):
+    from app.router import Router
+
+    s, app, _, _, state = env
+    s.router_mode, s.typesafe_key = "jev", "test-key"
+
+    def upstream(request):
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private upstream details", request=request)
+        if failure == "malformed":
+            return httpx.Response(200, json={"answers": {}})
+        return httpx.Response(failure, text="private upstream details")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        app.state.worker.router = Router(s, client)
+        row = await add(env, "Please plan my trip")
+    assert row["status"] == "needs_review"
+    assert row["transcript"] == "Please plan my trip"
+    assert "private" not in row["detail"]
+    assert not state["notion_calls"]
+
+
+def test_jev_settings_from_env_and_validation(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "a" * 40)
+    monkeypatch.setenv("INDEX_TOKEN", "i" * 40)
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("ROUTER_MODE", "jev")
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("JEV_API_KEY", "test-alias")
+    assert Settings.from_env().typesafe_key == "test-alias"
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-canonical")
+    assert Settings.from_env().typesafe_key == "test-canonical"
+    for invalid in ["nan", "inf", "-0.1", "1.1"]:
+        monkeypatch.setenv("JEV_MIN_CONFIDENCE", invalid)
+        with pytest.raises(ValueError, match="JEV_MIN_CONFIDENCE"):
+            Settings.from_env()
+    monkeypatch.setenv("JEV_MIN_CONFIDENCE", "0.75")
+    monkeypatch.setenv("NOTE_DESTINATION_DESCRIPTIONS", '{"missing":"A description"}')
+    with pytest.raises(ValueError, match="NOTE_DESTINATION_DESCRIPTIONS"):
+        Settings.from_env()
+    monkeypatch.delenv("NOTE_DESTINATION_DESCRIPTIONS")
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+    monkeypatch.delenv("JEV_API_KEY")
+    with pytest.raises(ValueError, match="Jev routing requires"):
+        Settings.from_env()

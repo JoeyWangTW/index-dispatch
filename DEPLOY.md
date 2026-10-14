@@ -21,17 +21,22 @@ Run `python scripts/configure.py` locally to generate `.env`. Transfer `ADMIN_TO
 | `ENCRYPTION_KEY` | Generated Fernet key |
 | `NOTE_DESTINATIONS` | JSON alias → Notion page ID mapping, e.g. `{"inbox":"PAGE_ID","ideas":"PAGE_ID"}` |
 | `DEFAULT_DESTINATION` | `inbox` |
-| `NOTION_TOKEN` | Your Notion integration secret |
-| `ROUTER_MODE` | `rules` initially; `openai` to enable semantic routing |
-| `OPENAI_API_KEY`, `ROUTER_MODEL` | Required only for AI routing |
+| `NOTION_TOKEN` | Your Notion internal connection token or personal access token |
+| `ROUTER_MODE` | `jev` for Jev routing; `rules` for commands only; `openai` as an alternative |
+| `TYPESAFE_API_KEY` | Jev API key (`JEV_API_KEY` is also accepted) |
+| `JEV_MODEL`, `JEV_MIN_CONFIDENCE` | Optional: `jev-latest`, `0.75` |
+| `NOTE_DESTINATION_DESCRIPTIONS` | Optional JSON alias → routing description; only configured aliases |
+| `OPENAI_API_KEY`, `ROUTER_MODEL` | Required only for `openai` routing |
 | `OAUTH_REDIRECT_URIS` | Exact HTTPS redirect URI(s) shown during your ChatGPT connection setup, comma-separated |
 | `DOTS_CALLBACK_HOSTS` | Exact permitted callback hostname(s); starts with `chatgpt.com`, adjust from the actual verified ChatGPT callback |
+
+In the service **Variables → RAW Editor**, add the values from your private `.env`, preserving existing variables. Save and deploy the staged changes. GitHub deployment does not upload your local `.env`. Missing page mappings are allowed at startup: notes remain in review until you configure them, and Dots tasks wait for a subscription.
 
 Railway variables are raw values: enter JSON without wrapping shell quotes. `.env` uses shell quotes because local setup sources it.
 
 ## 3. Connect Notion
 
-Create a Notion integration with permission to insert content, and grant it access to each target page. Configure ordinary page IDs, not database/data-source IDs. The adapter appends paragraphs to pages. Your ChatGPT Notion connection does not automatically grant this hosted server a reusable Notion token.
+Use a Notion personal access token with Notion API capability and access to the destination pages, or create an internal connection with permission to insert content and explicitly grant it access to each target page. Configure ordinary page IDs, not database/data-source IDs. The adapter appends paragraphs to pages. Your ChatGPT Notion connection does not automatically grant this hosted server a reusable Notion token.
 
 Open the dashboard, authenticate, submit `Note to inbox: Index Dispatch setup test`, refresh and confirm `completed`. Check the actual page. If the result is uncertain, look for the request ID before retrying.
 

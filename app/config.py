@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -20,6 +21,10 @@ class Settings:
     default_destination: str = "inbox"
     notion_token: str = ""
     router_mode: str = "rules"
+    typesafe_key: str = ""
+    jev_model: str = "jev-latest"
+    jev_min_confidence: float = 0.75
+    destination_descriptions: dict[str, str] = field(default_factory=dict)
     openai_key: str = ""
     router_model: str = ""
     oauth_redirects: list[str] = field(default_factory=list)
@@ -38,10 +43,19 @@ class Settings:
         if min(len(self.admin_token), len(self.ingest_token)) < 32 or self.admin_token == self.ingest_token:
             raise ValueError("Use two distinct random tokens of at least 32 characters")
         Fernet(self.encryption_key.encode())
-        if self.router_mode not in {"rules", "openai"}:
-            raise ValueError("ROUTER_MODE must be rules or openai")
+        if self.router_mode not in {"rules", "openai", "jev"}:
+            raise ValueError("ROUTER_MODE must be rules, jev or openai")
         if self.router_mode == "openai" and not (self.openai_key and self.router_model):
             raise ValueError("OpenAI routing requires OPENAI_API_KEY and ROUTER_MODEL")
+        if self.router_mode == "jev" and not (self.typesafe_key and self.jev_model):
+            raise ValueError("Jev routing requires TYPESAFE_API_KEY (or JEV_API_KEY) and JEV_MODEL")
+        if not math.isfinite(self.jev_min_confidence) or not 0 <= self.jev_min_confidence <= 1:
+            raise ValueError("JEV_MIN_CONFIDENCE must be a finite number from 0 to 1")
+        if not isinstance(self.destination_descriptions, dict) or any(
+            alias not in self.destinations or not isinstance(description, str) or not description.strip()
+            for alias, description in self.destination_descriptions.items()
+        ):
+            raise ValueError("NOTE_DESTINATION_DESCRIPTIONS must map configured aliases to descriptions")
         for alias, page in self.destinations.items():
             if not re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", alias):
                 raise ValueError("Destination names must be lowercase slugs")
@@ -67,6 +81,10 @@ class Settings:
             default_destination=os.getenv("DEFAULT_DESTINATION", "inbox"),
             notion_token=os.getenv("NOTION_TOKEN", ""),
             router_mode=os.getenv("ROUTER_MODE", "rules"),
+            typesafe_key=os.getenv("TYPESAFE_API_KEY") or os.getenv("JEV_API_KEY", ""),
+            jev_model=os.getenv("JEV_MODEL", "jev-latest"),
+            jev_min_confidence=float(os.getenv("JEV_MIN_CONFIDENCE", "0.75")),
+            destination_descriptions=json.loads(os.getenv("NOTE_DESTINATION_DESCRIPTIONS", "{}")),
             openai_key=os.getenv("OPENAI_API_KEY", ""),
             router_model=os.getenv("ROUTER_MODEL", ""),
             oauth_redirects=csv("OAUTH_REDIRECT_URIS"),
