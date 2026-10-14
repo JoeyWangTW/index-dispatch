@@ -41,6 +41,7 @@ async def env(tmp_path):
         database=str(tmp_path / "db.sqlite3"),
         destinations={"inbox": "a" * 32, "ideas": "b" * 32},
         notion_token="test-notion",
+        notion_timezone="America/Los_Angeles",
         oauth_redirects=["https://chatgpt.com/callback"],
         worker_enabled=False,
     )
@@ -48,6 +49,8 @@ async def env(tmp_path):
 
     def upstream(request):
         if request.url.host == "api.notion.com":
+            if request.method == "GET":
+                return httpx.Response(200, json={"results": [], "has_more": False})
             state["notion_calls"].append(request)
             if state["notion_status"] == "timeout":
                 raise httpx.ReadTimeout("test", request=request)
@@ -107,7 +110,8 @@ async def test_note_real_payload_and_duplicate(env):
     sent = state["notion_calls"][0]
     assert sent.method == "PATCH" and str(sent.url).endswith("b" * 32 + "/children")
     assert (
-        json.loads(sent.content)["children"][0]["paragraph"]["rich_text"][0]["text"]["content"] == "雲端筆記"
+        json.loads(sent.content)["children"][1]["bulleted_list_item"]["rich_text"][0]["text"]["content"]
+        == "雲端筆記"
     )
 
 
@@ -131,7 +135,10 @@ async def test_rate_limited_note_retries_and_long_note_chunks(env):
     await app.state.worker.tick()
     assert app.state.store.get(row["id"])["status"] == "completed"
     blocks = json.loads(state["notion_calls"][0].content)["children"]
-    assert max(len(b["paragraph"]["rich_text"][0]["text"]["content"]) for b in blocks) <= 2000
+    parts = blocks[1]["bulleted_list_item"]["rich_text"]
+    assert len(blocks) == 2
+    assert max(len(p["text"]["content"]) for p in parts) <= 2000
+    assert "".join(p["text"]["content"] for p in parts) == "x" * 9000
 
 
 async def test_dots_waits_verifies_delivers_and_reports(env):

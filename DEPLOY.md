@@ -21,6 +21,7 @@ Run `python scripts/configure.py` locally to generate `.env`. Transfer `ADMIN_TO
 | `ENCRYPTION_KEY` | Generated Fernet key |
 | `NOTE_DESTINATIONS` | JSON alias → Notion page ID mapping, e.g. `{"inbox":"PAGE_ID","ideas":"PAGE_ID"}` |
 | `DEFAULT_DESTINATION` | `inbox` |
+| `NOTION_TIMEZONE` | IANA time zone for daily sections, e.g. `America/Los_Angeles`; defaults to `UTC` |
 | `NOTION_TOKEN` | Your Notion internal connection token or personal access token |
 | `ROUTER_MODE` | `jev` for Jev routing; `rules` for commands only; `openai` as an alternative |
 | `TYPESAFE_API_KEY` | Jev API key (`JEV_API_KEY` is also accepted) |
@@ -36,9 +37,9 @@ Railway variables are raw values: enter JSON without wrapping shell quotes. `.en
 
 ## 3. Connect Notion
 
-Use a Notion personal access token with Notion API capability and access to the destination pages, or create an internal connection with permission to insert content and explicitly grant it access to each target page. Configure ordinary page IDs, not database/data-source IDs. The adapter appends paragraphs to pages. Your ChatGPT Notion connection does not automatically grant this hosted server a reusable Notion token.
+Use a Notion personal access token with Notion API capability and access to the destination pages, or create an internal connection with permission to insert content and explicitly grant it access to each target page. Configure ordinary page IDs, not database/data-source IDs. The adapter reads page blocks and appends notes as bullets under daily date headings. Grant read-content and insert-content permissions. Your ChatGPT Notion connection does not automatically grant this hosted server a reusable Notion token.
 
-Open the dashboard, authenticate, submit `Note to inbox: Index Dispatch setup test`, refresh and confirm `completed`. Check the actual page. If the result is uncertain, look for the request ID before retrying.
+Open the dashboard, authenticate, submit `Note to inbox: Index Dispatch setup test`, refresh and confirm `completed`. Check the actual page. If the result is uncertain, compare the note text and date with the dashboard request before retrying.
 
 ## 4. Connect Dots
 

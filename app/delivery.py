@@ -10,7 +10,9 @@ import json
 import socket
 import ssl
 import time
+from datetime import datetime
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 
 def signing_key(secret):
@@ -103,27 +105,76 @@ class Notion:
 
     async def append(self, request):
         page = self.settings.destinations[request["destination"]]
-        text = request["body"]
-        chunks = [text[i : i + 1800] for i in range(0, len(text), 1800)]
-        chunks.append(f"Index Dispatch · {request['id']}")
-        return await self.client.patch(
-            f"https://api.notion.com/v1/blocks/{page}/children",
-            headers={
-                "Authorization": f"Bearer {self.settings.notion_token}",
-                "Notion-Version": "2022-06-28",
-            },
-            json={
-                "children": [
-                    {
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
-                    }
-                    for chunk in chunks
-                ]
-            },
-            timeout=20,
-        )
+        url = f"https://api.notion.com/v1/blocks/{page}/children"
+        headers = {
+            "Authorization": f"Bearer {self.settings.notion_token}",
+            "Notion-Version": "2022-06-28",
+        }
+        recorded = request.get("recorded_at")
+        timestamp = recorded / 1000 if recorded is not None else request["created"]
+        day = datetime.fromtimestamp(timestamp, ZoneInfo(self.settings.notion_timezone)).date().isoformat()
+        # Read the page on every delivery so restarts and manual edits cannot stale a cache.
+        blocks, cursor, seen = [], None, set()
+        while True:
+            params = {"page_size": 100}
+            if cursor:
+                params["start_cursor"] = cursor
+            response = await self.client.get(url, headers=headers, params=params, timeout=20)
+            if not response.is_success:
+                return response
+            data = response.json()
+            blocks.extend(data["results"])
+            if not data["has_more"]:
+                break
+            cursor = data["next_cursor"]
+            if not cursor or cursor in seen:
+                raise ValueError("Invalid Notion pagination")
+            seen.add(cursor)
+
+        after = None
+        for i, block in enumerate(blocks):
+            if block.get("type") != "heading_2":
+                continue
+            heading = "".join(
+                part.get("plain_text", part.get("text", {}).get("content", ""))
+                for part in block["heading_2"]["rich_text"]
+            )
+            if heading == day:
+                after = block["id"]
+                for following in blocks[i + 1 :]:
+                    if following.get("type", "").startswith("heading_"):
+                        break
+                    after = following["id"]
+                break
+
+        def rich_text(text):
+            return [
+                {"type": "text", "text": {"content": text[i : i + 1800]}} for i in range(0, len(text), 1800)
+            ]
+
+        # One bullet per recording, even for long notes. IDs remain in the dashboard.
+        children = [
+            {
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": rich_text(request["body"])},
+            }
+        ]
+        payload = {"children": children}
+        if after:
+            # Insert before the next date's heading, including for delayed recordings.
+            payload["after"] = after
+        else:
+            children.insert(
+                0,
+                {
+                    "object": "block",
+                    "type": "heading_2",
+                    "heading_2": {"rich_text": rich_text(day)},
+                },
+            )
+        # A single write creates both a missing heading and its first bullet.
+        return await self.client.patch(url, headers=headers, json=payload, timeout=20)
 
 
 def serialize(value):
