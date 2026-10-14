@@ -647,6 +647,82 @@ async def test_acknowledgment_lifecycle_and_deadlines(env, monkeypatch):
     reopened.close()
 
 
+async def pending_tasks(app, owner="owner", **arguments):
+    result = await app.state.mcp.call(
+        "tools/call", {"name": "list_pending_tasks", "arguments": arguments}, owner
+    )
+    return json.loads(result["content"][0]["text"])
+
+
+async def test_missing_event_payload_recovers_without_resend_or_read_ack(env):
+    _, app, _, callbacks, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+    row = await add(env, "Dots, calculate 17 plus 26")
+    # The agent was woken without an event ID. Discover it through the durable inbox.
+    recovered = await pending_tasks(app)
+    assert [task["task_id"] for task in recovered["tasks"]] == [row["id"]]
+    assert recovered["tasks"][0]["text"] == "calculate 17 plus 26"
+    assert recovered["tasks"][0]["acknowledged_at"] is None
+    assert app.state.store.get(row["id"]) == row
+    await report(app, row["id"], "in_progress", "Calculating")
+    await report(app, row["id"], "completed", "43")
+    assert (await pending_tasks(app)) == {"tasks": [], "next_after_task_id": None}
+    await app.state.worker.tick()
+    assert len(callbacks.calls) == 2  # Subscription verification and one event.
+
+
+async def test_pending_tasks_owner_filters_and_pagination_after_completion(env):
+    _, app, _, _, _ = env
+    await app.state.mcp.call("events/subscribe", subscription_params(), "owner")
+    store = app.state.store
+    rows = [await add(env, f"Dots, request {i}") for i in range(4)]
+    await report(app, rows[1]["id"], "in_progress", "Working")
+    await report(app, rows[2]["id"], "needs_input", "Which language?")
+    store.update(rows[3]["id"], status="delivering")
+    # A different OAuth client, unassigned tasks, notes, and final results stay private/absent.
+    store.save_subscription(
+        "other-sub", "other", "https://chatgpt.com/events/other", "test", time.time() + 60
+    )
+    for status in ["queued", "ready", "waiting_subscription", "needs_review", "completed", "failed"]:
+        excluded, _ = store.add(f"Dots, excluded {status}")
+        store.update(excluded["id"], status=status, route="dots", subscription_id=rows[0]["subscription_id"])
+    other, _ = store.add("Dots, private other task")
+    store.update(other["id"], subscription_id="other-sub", route="dots", status="delivered")
+    note, _ = store.add("Note to inbox: private note")
+    store.update(note["id"], subscription_id=rows[0]["subscription_id"], route="note", status="delivered")
+    first = await pending_tasks(app, limit=2)
+    assert [t["task_id"] for t in first["tasks"]] == [r["id"] for r in rows[:2]]
+    assert first["next_after_task_id"] == rows[1]["id"]
+    for row in rows[:2]:
+        await report(app, row["id"], "completed", "Done")
+    second = await pending_tasks(app, limit=2, after_task_id=first["next_after_task_id"])
+    assert [t["task_id"] for t in second["tasks"]] == [r["id"] for r in rows[2:]]
+    assert [t["status"] for t in second["tasks"]] == ["needs_input", "delivering"]
+    assert second["next_after_task_id"] is None
+    assert (await pending_tasks(app, "stranger"))["tasks"] == []
+    assert [t["task_id"] for t in (await pending_tasks(app, "other"))["tasks"]] == [other["id"]]
+    with pytest.raises(Exception, match="Task not found for this connection"):
+        await pending_tasks(app, after_task_id=other["id"])
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"limit": 0},
+        {"limit": 21},
+        {"limit": True},
+        {"limit": "2"},
+        {"limit": 1.5},
+        {"after_task_id": ""},
+        {"after_task_id": 42},
+        {"unexpected": True},
+    ],
+)
+async def test_pending_tasks_rejects_invalid_queries(env, arguments):
+    with pytest.raises(Exception, match="Invalid pending-task query"):
+        await pending_tasks(env[1], **arguments)
+
+
 @pytest.mark.parametrize("outcome", [200, 503, "timeout"])
 @pytest.mark.parametrize("agent_status", ["in_progress", "needs_input", "completed", "failed"])
 async def test_agent_report_wins_webhook_race(env, outcome, agent_status):
