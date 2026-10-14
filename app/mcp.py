@@ -1,11 +1,15 @@
 import asyncio
 import hashlib
 import json
+import logging
 import secrets
 import time
+from urllib.parse import urlsplit
 
 from .delivery import serialize, signed_headers, signing_key, validate_callback
 from .worker import iso
+
+logger = logging.getLogger("uvicorn.error")
 
 EMPTY_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
 TASK_EVENT = {
@@ -112,15 +116,27 @@ class MCP:
             return {}
         try:
             validate_callback(url, self.settings.callback_hosts)
+        except (ValueError, TypeError):
+            # Only the hostname is diagnostic; callback paths and queries may contain secrets.
+            try:
+                host = urlsplit(url).hostname or "missing"
+                host = host if len(host) <= 253 and all(c.isalnum() or c in ".-" for c in host) else "invalid"
+            except ValueError:
+                host = "invalid"
+            logger.warning("MCP subscription rejected: callback host=%s", host)
+            raise RPCError(-32602, "Invalid callback URL") from None
+        try:
             secret = delivery["secret"]
             signing_key(secret)
-            ttl = p.get("ttlMs", 86400000)
-            if ttl is None:
-                ttl = 86400000
-            if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 0 < ttl <= 1e12:
-                raise ValueError("Invalid lifetime")
         except (ValueError, TypeError, KeyError):
-            raise RPCError(-32602, "Invalid callback, secret or lifetime") from None
+            logger.warning("MCP subscription rejected: signing secret format")
+            raise RPCError(-32602, "Invalid signing secret") from None
+        ttl = p.get("ttlMs", 86400000)
+        if ttl is None:
+            ttl = 86400000
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 0 < ttl <= 1e12:
+            logger.warning("MCP subscription rejected: lifetime")
+            raise RPCError(-32602, "Invalid subscription lifetime")
         current = self.store.subscription()
         if current and current["id"] != sub_id:
             raise RPCError(-32602, "V1 supports one Dot subscription; unsubscribe the existing one first")

@@ -516,3 +516,22 @@ async def test_mcp_diagnostics_exclude_params_and_credentials(env, caplog):
     assert "MCP operation=unknown rpc_error=-32601" in caplog.text
     for private in [token, "private-signing-secret", "private-voice-note", "private-method-name"]:
         assert private not in caplog.text
+
+
+async def test_subscription_rejection_diagnostics_are_specific_and_private(env, caplog):
+    _, app, _, _, _ = env
+    params = subscription_params()
+    params["delivery"]["url"] = "https://callbacks.example.com/private-path?token=private-query"
+    with pytest.raises(Exception, match="Invalid callback URL"):
+        await app.state.mcp.call("events/subscribe", params, "owner")
+    assert "callback host=callbacks.example.com" in caplog.text
+    assert "private-path" not in caplog.text and "private-query" not in caplog.text
+    caplog.clear()
+    params = subscription_params("private-secret")
+    with pytest.raises(Exception, match="Invalid signing secret"):
+        await app.state.mcp.call("events/subscribe", params, "owner")
+    assert "signing secret format" in caplog.text and "private-secret" not in caplog.text
+    params = subscription_params()
+    params["ttlMs"] = -1
+    with pytest.raises(Exception, match="Invalid subscription lifetime"):
+        await app.state.mcp.call("events/subscribe", params, "owner")
