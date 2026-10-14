@@ -26,6 +26,7 @@ class Settings:
     typesafe_key: str = ""
     jev_model: str = "jev-latest"
     jev_min_confidence: float = 0.75
+    dots_agent_aliases: list[str] = field(default_factory=lambda: ["kiro", "hiro"])
     destination_descriptions: dict[str, str] = field(default_factory=dict)
     openai_key: str = ""
     router_model: str = ""
@@ -88,6 +89,7 @@ class Settings:
             typesafe_key=os.getenv("TYPESAFE_API_KEY") or os.getenv("JEV_API_KEY", ""),
             jev_model=os.getenv("JEV_MODEL", "jev-latest"),
             jev_min_confidence=float(os.getenv("JEV_MIN_CONFIDENCE", "0.75")),
+            dots_agent_aliases=csv("DOTS_AGENT_ALIASES", "kiro,hiro"),
             destination_descriptions=json.loads(os.getenv("NOTE_DESTINATION_DESCRIPTIONS", "{}")),
             openai_key=os.getenv("OPENAI_API_KEY", ""),
             router_model=os.getenv("ROUTER_MODEL", ""),

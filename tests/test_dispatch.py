@@ -439,6 +439,56 @@ async def test_jev_request_contract_and_explicit_command_bypass(env):
         assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "text,body",
+    [
+        (
+            "Hey Hiro, check eBay and Alibaba delivery before my trip",
+            "check eBay and Alibaba delivery before my trip",
+        ),
+        ("Hi, Kiro: check my email and calendar", "check my email and calendar"),
+        ("Tell Kiro to find my receipt", "to find my receipt"),
+        ("Dots, research trains", "research trains"),
+    ],
+)
+async def test_agent_aliases_route_without_classifier(env, text, body):
+    s, _, _, _, _ = env
+    s.router_mode, s.typesafe_key = "jev", "test-key"
+    # No classifier response is configured: success requires the explicit route.
+    row = await add(env, text)
+    assert row["route"] == "dots" and row["status"] == "waiting_subscription"
+    assert row["body"] == body and row["transcript"] == text
+
+
+async def test_agent_aliases_are_configurable_and_do_not_match_name_fragments(env):
+    from app.router import Router
+
+    s, _, _, _, _ = env
+    s.dots_agent_aliases = ["Ada"]
+
+    def unexpected_call(request):
+        pytest.fail("Rules routing must not call a classifier")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected_call)) as client:
+        router = Router(s, client)
+        assert (await router.decide("Hey Ada, find my meeting")).route == "dots"
+        for text in ["Adapt the design later", "Hiroshima is on my travel list", "Kiro is my assistant"]:
+            assert (await router.decide(text)).route == "note"
+        assert (await router.decide("Note to inbox: ask Ada to check email later")).route == "note"
+        assert (await router.decide("Hey Ada")).route == "review"
+
+
+@pytest.mark.parametrize("choice,confidence", [("review", 0.99), ("dots", 0.4)])
+async def test_jev_review_reason_distinguishes_choice_from_low_confidence(env, choice, confidence):
+    s, _, _, _, state = env
+    s.router_mode, s.typesafe_key = "jev", "test-key"
+    state["ai"] = {"answers": {"destination": {"type": "choice", "choice": choice, "confidence": confidence}}}
+    row = await add(env, "Check my order")
+    assert row["status"] == "needs_review"
+    assert f"Jev selected {choice} (confidence {confidence:.2f})" in row["detail"]
+    assert ("below threshold 0.75" in row["detail"]) == (confidence < 0.75)
+
+
 @pytest.mark.parametrize("failure", ["timeout", 401, 429, 503, "malformed"])
 async def test_jev_failures_preserve_request_for_review(env, failure):
     from app.router import Router
@@ -470,6 +520,8 @@ def test_jev_settings_from_env_and_validation(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("JEV_API_KEY", "test-alias")
     assert Settings.from_env().typesafe_key == "test-alias"
+    monkeypatch.setenv("DOTS_AGENT_ALIASES", "Ada, Adah")
+    assert Settings.from_env().dots_agent_aliases == ["Ada", "Adah"]
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-canonical")
     assert Settings.from_env().typesafe_key == "test-canonical"
     for invalid in ["nan", "inf", "-0.1", "1.1"]:

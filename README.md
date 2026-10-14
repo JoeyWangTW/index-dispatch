@@ -21,10 +21,16 @@ flowchart LR
 | “Dots, research a three-day Kyoto itinerary” | Queue a task and send it to the connected Dot |
 | “Remember that the prototype needs larger buttons” | Save to `inbox` in command mode |
 | “Research a three-day Kyoto itinerary” | Can route to Dots in optional AI mode |
+| “Hey Kiro, check my eBay and Alibaba deliveries before my trip” | Send the request to the connected Dot |
+| “Check my email for the receipt and compare delivery with my calendar” | Route to Dots in AI mode |
 
 Command mode is the default and needs no model API key. It understands `Dots, …`, `ask Dots …`, and `note to NAME: …` / `note in NAME: …`. The colon or comma after a note destination is required. Other text becomes a note in the default destination. Unknown explicit destinations wait for review.
 
+`DOTS_AGENT_ALIASES` adds comma-separated names for the same connected Dot (default `kiro,hiro`, including the common transcription variant). Addressing one of these names, optionally after “hey”, “hi” or “hello”, routes directly to Dots without a classifier call. Set the aliases to your own assistant's name; `Dots` always works.
+
 Set `ROUTER_MODE=jev` and `TYPESAFE_API_KEY` (or `JEV_API_KEY`) to route with [Jev](https://docs.typesafe.ai/introduction/quickstart). `JEV_MODEL` defaults to `jev-latest`. Jev selects a configured Notion page, Dots, or review; the original transcript is preserved. Results below `JEV_MIN_CONFIDENCE` (default `0.75`) go to review. Built-in descriptions cover `inbox`, `ideas` and `journal`; customize any configured destination with `NOTE_DESTINATION_DESCRIPTIONS`, a JSON alias → description mapping. Note content is sent to TypeSafe when using Jev.
+
+AI routing treats Dots as a personal assistant with connected email and calendar tools. Requests to check orders, find messages, check availability, schedule, research or plan belong to Dots, including multiple questions for that assistant. Missing dates or order numbers are for the assistant to look up or clarify. Routing does not grant tool permissions or guarantee a connection; the Dot handles its normal permissions and confirmations. Explicit note-saving requests and observations remain notes. Unknown destinations, unsupported smart-home control, genuinely unclear intent, and mixed Notion-save/assistant requests wait for review. The dashboard records Jev's selected destination and confidence, including whether the review was caused by the confidence threshold.
 
 Alternatively, set `ROUTER_MODE=openai`, `OPENAI_API_KEY`, and a structured-output-capable `ROUTER_MODEL` to classify ordinary language. Explicit commands still take priority. Ambiguity, unsupported actions and classifier failures go to review. Semantic classification can make mistakes; start with explicit commands. No smart-home actions or other agent adapters ship in this version.
 
