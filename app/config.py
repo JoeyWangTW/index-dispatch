@@ -27,6 +27,8 @@ class Settings:
     jev_model: str = "jev-latest"
     jev_min_confidence: float = 0.75
     dots_agent_aliases: list[str] = field(default_factory=lambda: ["kiro", "hiro"])
+    dots_ack_timeout: int = 300
+    dots_progress_timeout: int = 1800
     destination_descriptions: dict[str, str] = field(default_factory=dict)
     openai_key: str = ""
     router_model: str = ""
@@ -55,6 +57,8 @@ class Settings:
             raise ValueError("Jev routing requires TYPESAFE_API_KEY (or JEV_API_KEY) and JEV_MODEL")
         if not math.isfinite(self.jev_min_confidence) or not 0 <= self.jev_min_confidence <= 1:
             raise ValueError("JEV_MIN_CONFIDENCE must be a finite number from 0 to 1")
+        if min(self.dots_ack_timeout, self.dots_progress_timeout) < 1:
+            raise ValueError("Dots acknowledgment and progress timeouts must be positive seconds")
         if not isinstance(self.destination_descriptions, dict) or any(
             alias not in self.destinations or not isinstance(description, str) or not description.strip()
             for alias, description in self.destination_descriptions.items()
@@ -90,6 +94,8 @@ class Settings:
             jev_model=os.getenv("JEV_MODEL", "jev-latest"),
             jev_min_confidence=float(os.getenv("JEV_MIN_CONFIDENCE", "0.75")),
             dots_agent_aliases=csv("DOTS_AGENT_ALIASES", "kiro,hiro"),
+            dots_ack_timeout=int(os.getenv("DOTS_ACK_TIMEOUT_SECONDS", "300")),
+            dots_progress_timeout=int(os.getenv("DOTS_PROGRESS_TIMEOUT_SECONDS", "1800")),
             destination_descriptions=json.loads(os.getenv("NOTE_DESTINATION_DESCRIPTIONS", "{}")),
             openai_key=os.getenv("OPENAI_API_KEY", ""),
             router_model=os.getenv("ROUTER_MODEL", ""),

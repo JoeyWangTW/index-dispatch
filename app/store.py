@@ -11,6 +11,7 @@ class Store:
     """One process, one persistent SQLite volume. Async operations never hold transactions open."""
 
     def __init__(self, settings):
+        self.settings = settings
         settings.prepare_directory()
         self.db = sqlite3.connect(settings.database, isolation_level=None, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -32,6 +33,11 @@ class Store:
             CREATE TABLE IF NOT EXISTS oauth (kind TEXT, key TEXT, value TEXT NOT NULL,
               expires REAL NOT NULL, PRIMARY KEY(kind,key));
         """)
+        # Additive migration: old deliveries have unknown acknowledgment/timing, not invented dates.
+        columns = {r[1] for r in self.db.execute("PRAGMA table_info(requests)")}
+        for column in ("delivered_at", "acknowledged_at", "progress_at", "finished_at"):
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE requests ADD COLUMN {column} REAL")
 
     def recover(self):
         self.db.execute("UPDATE requests SET status='queued' WHERE status='routing'")
@@ -66,7 +72,40 @@ class Store:
         return dict(row) if row else None
 
     def recent(self):
-        return [dict(r) for r in self.db.execute("SELECT * FROM requests ORDER BY created DESC LIMIT 100")]
+        return [
+            self.view(dict(r))
+            for r in self.db.execute("SELECT * FROM requests ORDER BY created DESC LIMIT 100")
+        ]
+
+    def view(self, row, now=None):
+        now = time.time() if now is None else now
+        result = {**row, "display_status": row["status"], "attention": False, "attention_detail": ""}
+        if row["route"] != "dots":
+            return result
+        if row["status"] == "delivered":
+            result["display_status"] = "awaiting_ack"
+            if row["delivered_at"] is None:
+                result.update(
+                    display_status="unconfirmed",
+                    attention=True,
+                    attention_detail="Older delivery: no agent acknowledgment was recorded. Check Kiro's chat before taking action.",
+                )
+            elif now - row["delivered_at"] >= self.settings.dots_ack_timeout:
+                result.update(
+                    display_status="no_ack",
+                    attention=True,
+                    attention_detail="ChatGPT accepted this request, but the agent has not acknowledged it. Check Kiro's chat using the task ID below.",
+                )
+        elif row["status"] == "in_progress":
+            if row["progress_at"] is None or now - row["progress_at"] >= self.settings.dots_progress_timeout:
+                result.update(
+                    display_status="stalled",
+                    attention=True,
+                    attention_detail="The agent started this request but has not reported a recent update or result. Completion is unconfirmed; check Kiro's chat.",
+                )
+        elif row["status"] in {"needs_input", "failed"}:
+            result["attention"] = True
+        return result
 
     def update(self, request_id, **fields):
         allowed = {
@@ -78,6 +117,10 @@ class Store:
             "attempts",
             "next_attempt",
             "subscription_id",
+            "delivered_at",
+            "acknowledged_at",
+            "progress_at",
+            "finished_at",
         }
         assert fields and fields.keys() <= allowed
         self.db.execute(
