@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -17,6 +18,20 @@ from .mcp import MCP, RPCError
 from .router import Decision, Router, validate
 from .store import Store
 from .worker import Worker
+
+logger = logging.getLogger("uvicorn.error")
+MCP_LOG_METHODS = frozenset(
+    {
+        "server/discover",
+        "initialize",
+        "ping",
+        "events/list",
+        "events/subscribe",
+        "events/unsubscribe",
+        "tools/list",
+        "tools/call",
+    }
+)
 
 
 class Limits:
@@ -232,14 +247,21 @@ def create_app(settings=None, client=None, callbacks=None):
         if "id" not in data:
             return Response(status_code=202)
         envelope = {"jsonrpc": "2.0", "id": data["id"]}
+        # Log only fixed operation names and outcomes, never request parameters or credentials.
+        operation = data["method"] if data["method"] in MCP_LOG_METHODS else "unknown"
+        logger.info("MCP operation=%s started", operation)
         try:
             envelope["result"] = await mcp.call(data["method"], data.get("params", {}), client_id)
         except RPCError as exc:
+            logger.warning("MCP operation=%s rpc_error=%s", operation, exc.code)
             envelope["error"] = {"code": exc.code, "message": exc.message}
             if exc.data:
                 envelope["error"]["data"] = exc.data
         except Exception:
+            logger.error("MCP operation=%s internal_error", operation)
             envelope["error"] = {"code": -32603, "message": "Internal error"}
+        else:
+            logger.info("MCP operation=%s succeeded", operation)
         return JSONResponse(envelope)
 
     return app

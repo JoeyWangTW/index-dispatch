@@ -485,3 +485,34 @@ def test_jev_settings_from_env_and_validation(monkeypatch):
     monkeypatch.delenv("JEV_API_KEY")
     with pytest.raises(ValueError, match="Jev routing requires"):
         Settings.from_env()
+
+
+async def test_mcp_diagnostics_exclude_params_and_credentials(env, caplog):
+    import logging
+
+    _, app, c, _, _ = env
+    token = "diagnostic-access-token"
+    app.state.store.oauth_put("client", "diagnostic-client", {"redirects": []}, 60)
+    app.state.store.oauth_put(
+        "access",
+        digest(token),
+        {"client_id": "diagnostic-client", "resource": "https://dispatch.example/mcp"},
+        60,
+    )
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    for method, params in [
+        ("events/list", {}),
+        ("events/subscribe", {"secret": "private-signing-secret", "text": "private-voice-note"}),
+        ("private-method-name", {}),
+    ]:
+        r = await c.post(
+            "/mcp",
+            headers={"Authorization": "Bearer " + token},
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        )
+        assert r.status_code == 200
+    assert "MCP operation=events/list succeeded" in caplog.text
+    assert "MCP operation=events/subscribe rpc_error=-32602" in caplog.text
+    assert "MCP operation=unknown rpc_error=-32601" in caplog.text
+    for private in [token, "private-signing-secret", "private-voice-note", "private-method-name"]:
+        assert private not in caplog.text
