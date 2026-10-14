@@ -28,6 +28,8 @@ Set `ROUTER_MODE=jev` and `TYPESAFE_API_KEY` (or `JEV_API_KEY`) to route with [J
 
 Alternatively, set `ROUTER_MODE=openai`, `OPENAI_API_KEY`, and a structured-output-capable `ROUTER_MODEL` to classify ordinary language. Explicit commands still take priority. Ambiguity, unsupported actions and classifier failures go to review. Semantic classification can make mistakes; start with explicit commands. No smart-home actions or other agent adapters ship in this version.
 
+Notion notes appear as one bullet per recording beneath a `YYYY-MM-DD` heading. Notes for the same day reuse that section, including after a restart; later days get a new heading. `NOTION_TIMEZONE` controls the calendar date (default `UTC`; use `America/Los_Angeles` for Pacific time). The recording timestamp takes priority over the time the server received it. IDs stay in the dashboard rather than appearing after every note. Existing paragraphs are not automatically rewritten.
+
 ## Hosting recommendation
 
 **Railway Hobby** fits this version: one Docker service plus one persistent volume. Its $5 monthly minimum includes $5 of usage; usage above that is additional. Budget roughly $5–10/month initially, then inspect measured usage. Optional model calls and third-party subscriptions are separate. [Railway pricing](https://railway.com/pricing).
@@ -69,7 +71,7 @@ Tests use isolated databases and mocked external services. They exercise real HT
 - SQLite commits before acknowledging receipt. Transcripts, decisions and results are stored in the volume. Subscription secrets are encrypted with `ENCRYPTION_KEY`; transcript data is not encrypted by the app.
 - Dots deliveries retry transient errors with a stable event ID and bounded backoff. A `delivered` task was received by ChatGPT, not necessarily executed. The Dot reports its final result with a tool.
 - This is at-least-once delivery. The Dot should use task IDs to avoid repeating work. Exactly-once external agent execution is not guaranteed.
-- Notion lacks an app-level idempotency transaction here. Ambiguous writes pause for manual review. Each note includes its request ID so you can check before approving a retry.
+- Notion lacks an app-level idempotency transaction here. Ambiguous writes pause for manual review. Check the note text and date on the destination page against the request in the dashboard before approving a retry.
 - One live Dots subscription is supported. Expired subscriptions stop delivery; queued tasks wait. Events have no protocol replay cursor. Already acknowledged events are not automatically resent.
 - Authorization is single-owner OAuth with PKCE, explicit redirect allowlists, short-lived access tokens, rotating refresh tokens and admin revocation. It is not a general-purpose multi-tenant identity service.
 - Callback host allowlists, public-IP validation on each connection, TLS hostname verification, no redirects and signed webhooks protect event delivery. Set a perimeter rate limit for public deployments; built-in rate limits are global and deliberately modest.

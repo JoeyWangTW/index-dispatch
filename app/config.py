@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
 
@@ -20,6 +21,7 @@ class Settings:
     destinations: dict[str, str] = field(default_factory=dict)
     default_destination: str = "inbox"
     notion_token: str = ""
+    notion_timezone: str = "UTC"
     router_mode: str = "rules"
     typesafe_key: str = ""
     jev_model: str = "jev-latest"
@@ -43,6 +45,7 @@ class Settings:
         if min(len(self.admin_token), len(self.ingest_token)) < 32 or self.admin_token == self.ingest_token:
             raise ValueError("Use two distinct random tokens of at least 32 characters")
         Fernet(self.encryption_key.encode())
+        ZoneInfo(self.notion_timezone)
         if self.router_mode not in {"rules", "openai", "jev"}:
             raise ValueError("ROUTER_MODE must be rules, jev or openai")
         if self.router_mode == "openai" and not (self.openai_key and self.router_model):
@@ -80,6 +83,7 @@ class Settings:
             destinations=json.loads(os.getenv("NOTE_DESTINATIONS", "{}")),
             default_destination=os.getenv("DEFAULT_DESTINATION", "inbox"),
             notion_token=os.getenv("NOTION_TOKEN", ""),
+            notion_timezone=os.getenv("NOTION_TIMEZONE", "UTC"),
             router_mode=os.getenv("ROUTER_MODE", "rules"),
             typesafe_key=os.getenv("TYPESAFE_API_KEY") or os.getenv("JEV_API_KEY", ""),
             jev_model=os.getenv("JEV_MODEL", "jev-latest"),
